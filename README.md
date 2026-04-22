@@ -4,7 +4,7 @@
   <img src="honeyslop-full.png" alt="HoneySlop" width="300">
 </p>
 
-honeyslop is code canaries, decoys, for open-source projects drowning in AI-hallucinated ("slop") and unverified vulnerability reports. A slop scanner ingests the canary, then generates a vulnerability "report" based on it. The report self-identifies as slop. Close it in one grep.
+honeyslop is code canaries, decoys, for open-source projects drowning in AI-hallucinated ("slop") and unverified vulnerability reports. With such adversarial noise injection, a slop scanner ingests the canary, then generates a vulnerability "report" based on it. The report self-identifies as slop. Close it in one grep.
 
 This is a quick PoC, vibe-coded as a joke (not production-grade), because we received a slop report at [raptor](https://github.com/gadievron/raptor), an autonomous attack/defense agent based on Claude Code, ourselves. Should be fun!
 
