@@ -1,13 +1,8 @@
 # honeyslop - code canaries to quickly triage hallucinated ("slop") vulnerability reports
 
-```
-██╗  ██╗ ██████╗ ███╗   ██╗███████╗██╗   ██╗███████╗██╗      ██████╗ ██████╗ 
-██║  ██║██╔═══██╗████╗  ██║██╔════╝╚██╗ ██╔╝██╔════╝██║     ██╔═══██╗██╔══██╗
-███████║██║   ██║██╔██╗ ██║█████╗   ╚████╔╝ ███████╗██║     ██║   ██║██████╔╝
-██╔══██║██║   ██║██║╚██╗██║██╔══╝    ╚██╔╝  ╚════██║██║     ██║   ██║██╔═══╝ 
-██║  ██║╚██████╔╝██║ ╚████║███████╗   ██║   ███████║███████╗╚██████╔╝██║     
-╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝   ╚═╝   ╚══════╝╚══════╝ ╚═════╝ ╚═╝     
-```
+<p align="center">
+  <img src="honeyslop-full.png" alt="HoneySlop" width="300">
+</p>
 
 Written by: Gadi Evron (@gadievron), John Cartwright (@grokjc), Daniel Cuthbert (@danielcuthbert), and Michal Kamensky (@kamenskymic, with props for naming the project).
 
