@@ -6,7 +6,7 @@
 
 honeyslop is code canaries, decoys, for open-source projects drowning in AI-hallucinated ("slop") and unverified vulnerability reports. A slop scanner ingests the canary, then generates a vulnerability "report" based on it. The report self-identifies as slop. Close it in one grep.
 
-This is a quick PoC, vibe-coded as a joke (not production-grade), because we received a slop report at raptor, ourselves. Should be fun!
+This is a quick PoC, vibe-coded as a joke (not production-grade), because we received a slop report at [raptor](https://github.com/gadievron/raptor), ourselves. Should be fun!
 
 Code canaries extend familiar triage signals (e.g. detections in test files, example secrets, non-existent paths) into deliberate markers, or decoys. In tests, these canaries work well enough to flag slop, but they can be further improved (embedded in real code, function/file/directory names less indicative, regularly regenerated as new code, etc.).
 
