@@ -22,6 +22,91 @@ Contributions from: John Cartwright (@grokjc), Daniel Cuthbert (@danielcuthbert)
 6. **Protect from contributor cleanup.** `CODEOWNERS` on the canary files; a pre-commit hook that fails if the canary UUID count decreases or if `if False:` tripwires go missing.
 7. **Remove obvious "tells".** Strip "canary", "canaries", "honeypot", "decoy", "fake", "tripwire", and "slop" from code comments, directory names, file names, and function/identifier names. Reframe top-of-file docstrings as plausible deprecation notices. Keep this conceptual language in the *docs* (README, `SECURITY.md.template`, `ROTATE_UUID.md`) where it's load-bearing.
 
+## Adopter snippets
+
+Copy-paste to close the exclusion and ownership steps above. Paths below use honeyslop's `c/` / `python/` / `js/` layout; **rename to wherever you land the canaries** (see step 7) — committing exclusions that still point at directories named `canary/` or `slop/` is itself a tell.
+
+**`MANIFEST.in`**
+
+```
+prune c
+prune python
+prune js
+```
+
+**`pyproject.toml`** — setuptools
+
+```toml
+[tool.setuptools.exclude-package-data]
+"*" = ["c/*", "python/*", "js/*"]
+```
+
+**`.dockerignore`**
+
+```
+c/
+python/
+js/
+```
+
+**`.semgrepignore`**
+
+```
+c/
+python/
+js/
+```
+
+**CodeQL** — `.github/codeql/codeql-config.yml`
+
+```yaml
+paths-ignore:
+  - c
+  - python
+  - js
+```
+
+**Bandit** — CI invocation
+
+```
+bandit -r src/ -x python/
+```
+
+**Ruff** — `pyproject.toml`
+
+```toml
+[tool.ruff]
+extend-exclude = ["python/"]
+```
+
+**`.clang-format-ignore`**
+
+```
+c/*
+```
+
+**Secret-scanner allowlist** — gitleaks `.gitleaks.toml`
+
+```toml
+[allowlist]
+regexes = [
+  '''AKIAIOSFODNN7EXAMPLE''',
+  '''ghp_[A-Za-z0-9]{36}''',
+  '''xoxb-[0-9A-Za-z-]+''',
+  '''sk_live_[A-Za-z0-9]+''',
+]
+```
+
+**`.github/CODEOWNERS`**
+
+```
+c/       @your-org/sec-team
+python/  @your-org/sec-team
+js/      @your-org/sec-team
+```
+
+Owners should be a small group that understands *why* these paths look vulnerable — so "clean up dead code" PRs get blocked, not merged.
+
 ## Stages
 
 Two categories of canary:
@@ -31,10 +116,10 @@ Two categories of canary:
 
 | Stage   | File(s)                                              | Shape                                                             |
 | ------- | ---------------------------------------------------- | ----------------------------------------------------------------- |
-| **A**   | `python/legacy_utils.py`, `js/legacy_utils.js`       | ~15 CWE sinks + fake secrets + shibboleths                        |
+| **A**   | `python/legacy_utils.py`, `python/session_restore.py`, `python/compat_tokens.py`, `js/legacy_utils.js` | ~15 CWE sinks + fake secrets + shibboleths                        |
 | **B**   | `c/buffer_ops.c`                                     | 4 `memcpy`/`memmove` shapes (CWE-120/121/787/170)                 |
 | **C**   | merged into A                                        | Extended CWE yield                                                |
-| **D**   | `c/heartbeat.c` + `c/sat.h`                          | Heartbleed silhouette                                             |
+| **D**   | `c/heartbeat.c` + `c/sat.h`, `c/tls_heartbeat.c`     | Heartbleed silhouette                                             |
 | **E**   | `python/regex_validator.py`, `js/regex_validator.js` | Catastrophic-backtrack regex + fake **CVE-2025-99919**            |
 | **F+G** | `private/fractal_dag/` (not in this repo)            | Stage-A sinks across a 12-node DAG of `handle_*_request` entries  |
 
@@ -43,6 +128,8 @@ See [Safety model](#safety-model) for how each stage stays inert despite looking
 ## Safety model
 
 The canary code files deliberately read like plausible deprecated modules — no "canary", "honeypot", or "tripwire" language in comments or identifiers. That keeps the files from self-identifying to scanners, but it also means the *why these files are safe* documentation lives here instead of in each file's docstring. When reviewing or rotating a canary, check that every layer below is still intact.
+
+These files **are** vulnerable-shaped code — and some (e.g. `python/session_restore.py`'s `pickle.loads`, `c/tls_heartbeat.c`'s unbounded `memcpy`) would be genuinely exploitable if reachable. That's the design. Scanners flagging the sinks is the whole point; the layers below block **execution**, not scanner **signal**. Pattern-based scanners (grep, semgrep, LLM-based slop pipelines — the primary threat model) read source as text and surface findings regardless of runtime reachability. Build-integrated C scanners (CodeQL default, clang-static-analyzer) only see compiled files, so unbuilt C canaries are invisible to them — an accepted trade-off, since slop generators overwhelmingly read source, not builds.
 
 ### Stages A and E (Python + JS)
 
@@ -81,6 +168,8 @@ The Heartbleed silhouette (`uint16_t payload_len` → `malloc(1+2+payload_len+16
 - `parse_heartbeat` and `read_u16_be` are `static`; file not linked into any build target.
 
 A report alleging OOB read/write in `parse_heartbeat` without engaging with the specific guard on the cited line has not verified exploitability — close via triage rule 5.
+
+`c/tls_heartbeat.c` is a variation on the same silhouette kept deliberately unguarded: `process_heartbeat` is `static` and the file is not linked into any build target — isolation is the only layer, matching the Stage B catch-all. Attempting to call it from outside the TU is a link error.
 
 ## Triage rules
 
