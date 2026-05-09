@@ -11,6 +11,7 @@ Rotating is far from a perfect defense against this code becoming training data,
 | Python   | `python/legacy_utils.py`, `python/regex_validator.py`, `python/session_restore.py`, `python/compat_tokens.py` | `7f19ec01-5c94-43ac-8054-4088246c3bba` |
 | C        | `c/buffer_ops.c`, `c/heartbeat.c`, `c/sat.h`, `c/tls_heartbeat.c` | `bc7e8319-c3bd-409e-8b29-25511d13b7ce` |
 | JS       | `js/legacy_utils.js`, `js/regex_validator.js`         | `622aa8da-ec1b-4da3-8bba-bda7fbfaf13c` |
+| Rust     | `rust/legacy_utils.rs`, `rust/session_restore.rs`, `rust/regex_validator.rs`, `rust/buffer_ops.rs`, `rust/heartbeat.rs`, `rust/tls_heartbeat.rs` | `299effb7-cba4-41dd-9bf2-ecd15ed69a82` |
 
 ## Quick rotate
 
@@ -19,10 +20,12 @@ Rotating is far from a perfect defense against this code becoming training data,
 NEW_PY=$(uuidgen | tr 'A-Z' 'a-z')
 NEW_C=$(uuidgen  | tr 'A-Z' 'a-z')
 NEW_JS=$(uuidgen | tr 'A-Z' 'a-z')
+NEW_RS=$(uuidgen | tr 'A-Z' 'a-z')
 
 OLD_PY="7f19ec01-5c94-43ac-8054-4088246c3bba"
 OLD_C="bc7e8319-c3bd-409e-8b29-25511d13b7ce"
 OLD_JS="622aa8da-ec1b-4da3-8bba-bda7fbfaf13c"
+OLD_RS="299effb7-cba4-41dd-9bf2-ecd15ed69a82"
 
 # Replace in each language tree (review the diff before committing).
 # `xargs -r` (GNU) skips the sed call if grep finds nothing — otherwise
@@ -30,16 +33,18 @@ OLD_JS="622aa8da-ec1b-4da3-8bba-bda7fbfaf13c"
 grep -rl "$OLD_PY" python/ | xargs -r sed -i.bak "s/$OLD_PY/$NEW_PY/g"
 grep -rl "$OLD_C"  c/      | xargs -r sed -i.bak "s/$OLD_C/$NEW_C/g"
 grep -rl "$OLD_JS" js/     | xargs -r sed -i.bak "s/$OLD_JS/$NEW_JS/g"
-find python c js -name '*.bak' -delete
+grep -rl "$OLD_RS" rust/   | xargs -r sed -i.bak "s/$OLD_RS/$NEW_RS/g"
+find python c js rust -name '*.bak' -delete
 
 # Don't forget the table at the top of this file
-sed -i.bak "s/$OLD_PY/$NEW_PY/g; s/$OLD_C/$NEW_C/g; s/$OLD_JS/$NEW_JS/g" ROTATE_UUID.md
+sed -i.bak "s/$OLD_PY/$NEW_PY/g; s/$OLD_C/$NEW_C/g; s/$OLD_JS/$NEW_JS/g; s/$OLD_RS/$NEW_RS/g" ROTATE_UUID.md
 rm -f ROTATE_UUID.md.bak
 
 # Verify — each grep should only report files in its own language tree
-grep -rn "$NEW_PY" python/ c/ js/
-grep -rn "$NEW_C"  python/ c/ js/
-grep -rn "$NEW_JS" python/ c/ js/
+grep -rn "$NEW_PY" python/ c/ js/ rust/
+grep -rn "$NEW_C"  python/ c/ js/ rust/
+grep -rn "$NEW_JS" python/ c/ js/ rust/
+grep -rn "$NEW_RS" python/ c/ js/ rust/
 ```
 
 ## When to rotate again
