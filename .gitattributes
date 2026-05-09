@@ -3,3 +3,4 @@ c/*.h       linguist-vendored=true
 python/*.py linguist-vendored=true
 js/*.js     linguist-vendored=true
 rust/*.rs   linguist-vendored=true
+go/*.go     linguist-vendored=true

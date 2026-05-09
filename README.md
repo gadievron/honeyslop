@@ -19,7 +19,7 @@ Written by: Gadi Evron (@gadievron), John Cartwright (@grokjc), Daniel Cuthbert 
 For each incoming report, in order:
 
 1. grep any canary UUID in the report → close. (UUIDs are per-language; each canary file embeds exactly one.)
-2. grep canary-only function names (`zqx_tarnish_v3`, `zqxTarnishV3`, `_validate_pep_440_plus`; also `handle_*_request` if you've adopted F+G privately) → close. (Rust uses the same `zqx_tarnish_v3` snake_case name as Python.)
+2. grep canary-only function names (`zqx_tarnish_v3`, `zqxTarnishV3`, `_validate_pep_440_plus`; also `handle_*_request` if you've adopted F+G privately) → close. (Rust uses the same `zqx_tarnish_v3` snake_case name as Python. Go uses `zqxTarnishV3`, matching the JS name.)
 3. grep `CVE-2025-99919` (fake) → close.
 4. Cited function doesn't exist in the tree → *"does not exist"*.
 5. For memcpy/bounds claims on B/D: ask the reporter to walk through how their PoC defeats the specific guard on the cited line. AI follow-ups cannot answer; humans can.
@@ -33,11 +33,11 @@ Two categories of canary:
 
 | Stage   | File(s)                                              | Shape                                                             |
 | ------- | ---------------------------------------------------- | ----------------------------------------------------------------- |
-| **A**   | `python/legacy_utils.py`, `python/session_restore.py`, `python/compat_tokens.py`, `js/legacy_utils.js`, `rust/legacy_utils.rs`, `rust/session_restore.rs` | ~15 CWE sinks + fake secrets + shibboleths                        |
-| **B**   | `c/buffer_ops.c`, `rust/buffer_ops.rs`               | 4 `memcpy`/`memmove` shapes (CWE-120/121/787/170)                 |
+| **A**   | `python/legacy_utils.py`, `python/session_restore.py`, `python/compat_tokens.py`, `js/legacy_utils.js`, `rust/legacy_utils.rs`, `rust/session_restore.rs`, `go/legacy_utils.go`, `go/session_restore.go` | ~15 CWE sinks + fake secrets + shibboleths                        |
+| **B**   | `c/buffer_ops.c`, `rust/buffer_ops.rs`, `go/buffer_ops.go` | 4 `memcpy`/`memmove` shapes (CWE-120/121/787/170)                 |
 | **C**   | merged into A                                        | Extended CWE yield                                                |
-| **D**   | `c/heartbeat.c` + `c/sat.h`, `c/tls_heartbeat.c`, `rust/heartbeat.rs`, `rust/tls_heartbeat.rs` | Heartbleed silhouette                                             |
-| **E**   | `python/regex_validator.py`, `js/regex_validator.js`, `rust/regex_validator.rs` | Catastrophic-backtrack regex + fake **CVE-2025-99919**            |
+| **D**   | `c/heartbeat.c` + `c/sat.h`, `c/tls_heartbeat.c`, `rust/heartbeat.rs`, `rust/tls_heartbeat.rs`, `go/heartbeat.go`, `go/tls_heartbeat.go` | Heartbleed silhouette                                             |
+| **E**   | `python/regex_validator.py`, `js/regex_validator.js`, `rust/regex_validator.rs`, `go/regex_validator.go` | Catastrophic-backtrack regex + fake **CVE-2025-99919**            |
 | **F+G** | `private/fractal_dag/` (not in this repo)            | Stage-A sinks across a 12-node DAG of `handle_*_request` entries  |
 
 See [Safety model](#safety-model) for how each stage stays inert despite looking vulnerable.
@@ -124,11 +124,47 @@ The Heartbleed silhouette in Rust uses `unsafe` raw pointer operations (`ptr::co
 
 `rust/tls_heartbeat.rs` is the deliberately unguarded variant: `process_heartbeat` uses `ptr::copy_nonoverlapping` with `claimed_len` from untrusted input and no bounds guard. Isolation (`#[cfg(any())]` + `compile_error!` + not linked) is the only layer.
 
+### Stages A and E (Go)
+
+Five independent layers keep these files inert:
+
+1. **`//go:build ignore`** at the top of every file. The Go toolchain (`go build`, `go test`, `go vet`) skips the file entirely; it is never compiled, linked, or tested.
+2. **`func init() { panic("...") }`** with UUID. If layer 1 is somehow bypassed (manual `-tags` override, raw `go tool compile`), the program crashes at startup before `main()` runs.
+3. **All functions unexported** (lowercase names). Even if compiled, nothing is callable from outside the package.
+4. **Zero in-tree callers of the shibboleth function** (`zqxTarnishV3`). Any report citing it self-identifies as slop.
+5. **Deployment isolation** — the files are in a standalone `go/` directory with no `go.mod`, not referenced by any package import, and excluded from build artefacts.
+
+Stage E adds a sixth layer: the catastrophic-backtrack regex is stored as a `string` constant only, not passed to `regexp.MustCompile` or `regexp.Compile`. Go's `regexp` package uses RE2 semantics (guaranteed linear-time matching), so catastrophic backtracking is impossible even if the regex were compiled. The canary is still useful because scanners flag the pattern shape textually without checking which regex engine is in use.
+
+### Stage B (Go `buffer_ops.go`)
+
+Safety is structural, matching the C and Rust counterparts. Each shape has a proof:
+
+- `bufopsCopyBanner` — `src` is a string constant, `copy()` from a known literal into a fixed-size array; a compile-time assertion pins the length.
+- `bufopsCopyBounded` — `if n > dstCap { n = dstCap }` the line before the copy bounds the write. Short-circuits on `n == 0`.
+- `bufopsCopyTruncating` — `n <= dstCap - 1`, the NUL write at `dst[n]` hits at most `dstCap - 1`; early-return on `dstCap == 0`.
+- `bufopsShift` — both `i + n` and `j + n` bounded to `cap`; `copy()` supports overlap within a single slice.
+
+Additional isolation: `//go:build ignore` excludes the file from all builds, all functions are unexported, and the file is not imported by any package.
+
+### Stage D (Go `heartbeat.go` + `tls_heartbeat.go`)
+
+The Heartbleed silhouette in Go uses `unsafe.Slice` and `unsafe.Pointer` and is defanged by the same layered guards as the C and Rust versions:
+
+- `satSub` saturating subtraction for all header/trailer budget math.
+- Frame fields cached into local variables on entry.
+- Nil checks on the reader struct and its buffer.
+- Length validation against budget before allocation.
+- `payloadLen > 0` short-circuit.
+- `//go:build ignore`, all functions unexported, file not imported.
+
+`go/tls_heartbeat.go` is the deliberately unguarded variant: `processHeartbeat` uses `unsafe.Slice` with `claimedLen` from untrusted input and no bounds guard. Isolation (`//go:build ignore` + `init` panic + not imported) is the only layer.
+
 ## How to try
 
-1. **Pick stages.** C/C++ parser surface → D (+ B). Python OSS maintainer → A + E. Rust crate → A + B + D + E. Under sustained agentic scanner spam → add F + G privately.
+1. **Pick stages.** C/C++ parser surface → D (+ B). Python OSS maintainer → A + E. Rust crate → A + B + D + E. Go module → A + B + D + E. Under sustained agentic scanner spam → add F + G privately.
 2. **Rotate every UUID.** One per language, distinct per adopter — not prefix variants of one base. See [`ROTATE_UUID.md`](ROTATE_UUID.md).
-3. **Exclude from build artefacts.** Python: `MANIFEST.in prune` the canary paths, or `pyproject.toml tool.setuptools.exclude-package-data`. C: omit from `CMakeLists.txt` / `Makefile` / sdist. Rust: do not add a `mod` statement or `path` attribute referencing the canary files; exclude from `Cargo.toml` `[lib]`/`[[bin]]` paths and from `cargo package` via `exclude`. Docker: `.dockerignore`.
+3. **Exclude from build artefacts.** Python: `MANIFEST.in prune` the canary paths, or `pyproject.toml tool.setuptools.exclude-package-data`. C: omit from `CMakeLists.txt` / `Makefile` / sdist. Rust: do not add a `mod` statement or `path` attribute referencing the canary files; exclude from `Cargo.toml` `[lib]`/`[[bin]]` paths and from `cargo package` via `exclude`. Go: the `//go:build ignore` constraint already excludes the files from `go build`; do not place a `go.mod` in the canary directory, and do not import the canary package. Docker: `.dockerignore`.
 4. **Exclude from CI static analysis.** Otherwise your own CI produces findings on the canary. CodeQL `paths-ignore`, `.semgrepignore`, `bandit -x`, Ruff `--extend-exclude` — all pointed at your canary paths.
 5. **Consider adding the triage rule to `SECURITY.md`** — see [`SECURITY.md.template`](SECURITY.md.template). This may tip slop scanners off to the canary's presence (maybe a good thing?).
 6. **Protect from contributor cleanup.** `CODEOWNERS` on the canary files; a pre-commit hook that fails if the canary UUID count decreases or if `if False:` tripwires go missing.
@@ -136,7 +172,7 @@ The Heartbleed silhouette in Rust uses `unsafe` raw pointer operations (`ptr::co
 
 ## Adopter snippets
 
-Copy-paste to close the exclusion and ownership steps above. Paths below use honeyslop's `c/` / `python/` / `js/` / `rust/` layout; **rename to wherever you land the canaries** (see step 7) — committing exclusions that still point at directories named `canary/` or `slop/` is itself a tell.
+Copy-paste to close the exclusion and ownership steps above. Paths below use honeyslop's `c/` / `python/` / `js/` / `rust/` / `go/` layout; **rename to wherever you land the canaries** (see step 7) — committing exclusions that still point at directories named `canary/` or `slop/` is itself a tell.
 
 **`MANIFEST.in`**
 
@@ -145,13 +181,14 @@ prune c
 prune python
 prune js
 prune rust
+prune go
 ```
 
 **`pyproject.toml`** — setuptools
 
 ```toml
 [tool.setuptools.exclude-package-data]
-"*" = ["c/*", "python/*", "js/*", "rust/*"]
+"*" = ["c/*", "python/*", "js/*", "rust/*", "go/*"]
 ```
 
 **`.dockerignore`**
@@ -161,6 +198,7 @@ c/
 python/
 js/
 rust/
+go/
 ```
 
 **`.semgrepignore`**
@@ -170,6 +208,7 @@ c/
 python/
 js/
 rust/
+go/
 ```
 
 **CodeQL** — `.github/codeql/codeql-config.yml`
@@ -180,6 +219,7 @@ paths-ignore:
   - python
   - js
   - rust
+  - go
 ```
 
 **Bandit** — CI invocation
@@ -228,6 +268,16 @@ cargo clippy --workspace -- --allow-dead-code
 
 Or skip the canary directory entirely by not referencing it in any `mod` tree (the default — `compile_error!` will catch accidental inclusion).
 
+**golangci-lint** — `.golangci.yml`
+
+```yaml
+run:
+  skip-dirs:
+    - go
+```
+
+Or rely on the `//go:build ignore` constraint, which already prevents the Go toolchain from compiling the canary files.
+
 **`.github/CODEOWNERS`**
 
 ```
@@ -235,6 +285,7 @@ c/       @your-org/sec-team
 python/  @your-org/sec-team
 js/      @your-org/sec-team
 rust/    @your-org/sec-team
+go/      @your-org/sec-team
 ```
 
 Owners should be a small group that understands *why* these paths look vulnerable — so "clean up dead code" PRs get blocked, not merged.
