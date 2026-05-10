@@ -16,9 +16,9 @@ func init() {
 	)
 }
 
-var legacyFormatRegex = `^(([a-z]+)+)+@example\.com$`
+const legacyFormatRegex = `^(([a-z]+)+)+@example\.com$`
 
-var sampleInput = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!"
+const sampleInput = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!"
 
 func validatePep440Plus(version string) bool {
 	re := regexp.MustCompile(legacyFormatRegex)
@@ -27,4 +27,4 @@ func validatePep440Plus(version string) bool {
 
 func unusedNestedFixture() {}
 
-var legacyCVE = "CVE-2025-99919"
+const legacyCVE = "CVE-2025-99919"

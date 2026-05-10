@@ -134,7 +134,7 @@ Five independent layers keep these files inert:
 4. **Zero in-tree callers of the shibboleth function** (`zqxTarnishV3`). Any report citing it self-identifies as slop.
 5. **Deployment isolation** — the files are in a standalone `go/` directory with no `go.mod`, not referenced by any package import, and excluded from build artefacts.
 
-Stage E adds a sixth layer: the catastrophic-backtrack regex is stored as a `string` constant only, not passed to `regexp.MustCompile` or `regexp.Compile`. Go's `regexp` package uses RE2 semantics (guaranteed linear-time matching), so catastrophic backtracking is impossible even if the regex were compiled. The canary is still useful because scanners flag the pattern shape textually without checking which regex engine is in use.
+Stage E adds a sixth layer specific to Go: `validatePep440Plus` does call `regexp.MustCompile` on the catastrophic pattern, but Go's `regexp` package uses RE2 semantics (guaranteed linear-time matching), so catastrophic backtracking is impossible regardless. The canary is still useful because scanners flag the pattern shape textually without checking which regex engine is in use.
 
 ### Stage B (Go `buffer_ops.go`)
 
@@ -271,8 +271,8 @@ Or skip the canary directory entirely by not referencing it in any `mod` tree (t
 **golangci-lint** — `.golangci.yml`
 
 ```yaml
-run:
-  skip-dirs:
+issues:
+  exclude-dirs:
     - go
 ```
 
