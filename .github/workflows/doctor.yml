@@ -1,0 +1,30 @@
+name: honeyslop doctor
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  doctor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run honeyslop doctor
+        run: python3 scripts/honeyslop-doctor
+
+      - name: Check Python syntax
+        run: python3 -m py_compile python/*.py
+
+      - name: Check JavaScript syntax
+        run: |
+          for file in js/*.js; do
+            node --check "$file"
+          done
+
+      - name: Check C syntax
+        run: clang -fsyntax-only c/*.c
+
+      - name: Check Go formatting
+        run: test -z "$(gofmt -l go/*.go)"
