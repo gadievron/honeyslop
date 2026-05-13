@@ -1,0 +1,225 @@
+#!/usr/bin/env python3
+"""Rotate honeyslop UUIDs safely across source files and ROTATE_UUID.md."""
+
+from __future__ import annotations
+
+import argparse
+import re
+import subprocess
+import sys
+import uuid
+from dataclasses import dataclass
+from pathlib import Path
+
+UUID_RE = re.compile(
+    r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+    re.IGNORECASE,
+)
+
+LANGUAGE_PATHS = {
+    "py": [Path("python")],
+    "c": [Path("c")],
+    "js": [Path("js")],
+    "rs": [Path("rust")],
+    "go": [Path("go")],
+}
+
+LANGUAGE_NAMES = {
+    "py": "Python",
+    "c": "C",
+    "js": "JS",
+    "rs": "Rust",
+    "go": "Go",
+}
+
+ROW_RE = re.compile(r"^(\|\s*(Python|C|JS|Rust|Go)\s*\|.*?`)([0-9a-f-]{36})(`.*)$", re.I)
+
+
+@dataclass(frozen=True)
+class Rotation:
+    language_key: str
+    language_name: str
+    old: str
+    new: str
+
+
+class RotationError(RuntimeError):
+    pass
+
+
+def repo_root_from(path: Path) -> Path:
+    try:
+        output = subprocess.check_output(
+            ["git", "-C", str(path), "rev-parse", "--show-toplevel"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+        return Path(output)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return path.resolve()
+
+
+def read(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
+
+
+def write(path: Path, text: str, dry_run: bool) -> None:
+    if not dry_run:
+        path.write_text(text, encoding="utf-8")
+
+
+def current_uuids(root: Path) -> dict[str, str]:
+    rotate_md = root / "ROTATE_UUID.md"
+    if not rotate_md.exists():
+        raise RotationError("ROTATE_UUID.md not found")
+
+    by_name: dict[str, str] = {}
+    for line in read(rotate_md).splitlines():
+        match = ROW_RE.match(line)
+        if match:
+            by_name[match.group(2).lower()] = match.group(3).lower()
+
+    rotations: dict[str, str] = {}
+    for key, name in LANGUAGE_NAMES.items():
+        uuid_value = by_name.get(name.lower())
+        if not uuid_value:
+            raise RotationError(f"ROTATE_UUID.md is missing the {name} UUID row")
+        rotations[key] = uuid_value
+
+    if len(set(rotations.values())) != len(rotations):
+        raise RotationError("existing UUIDs are not unique per language")
+    return rotations
+
+
+def source_files(root: Path, language_key: str) -> list[Path]:
+    files: list[Path] = []
+    for rel_dir in LANGUAGE_PATHS[language_key]:
+        directory = root / rel_dir
+        if not directory.is_dir():
+            raise RotationError(f"missing language directory: {rel_dir}")
+        files.extend(path for path in directory.rglob("*") if path.is_file())
+    return sorted(files)
+
+
+def validate_existing_layout(root: Path, old_by_key: dict[str, str]) -> None:
+    for key, old_uuid in old_by_key.items():
+        expected_files = source_files(root, key)
+        seen_files = []
+        for path in expected_files:
+            text = read(path)
+            uuids = {match.lower() for match in UUID_RE.findall(text)}
+            if old_uuid in uuids:
+                seen_files.append(path)
+            unexpected = uuids - {old_uuid}
+            if unexpected:
+                rel = path.relative_to(root)
+                raise RotationError(
+                    f"{rel} contains unexpected UUID(s): {', '.join(sorted(unexpected))}"
+                )
+        if not seen_files:
+            raise RotationError(f"no {LANGUAGE_NAMES[key]} files contain {old_uuid}")
+
+
+def make_rotations(old_by_key: dict[str, str], explicit: dict[str, str]) -> list[Rotation]:
+    new_values: dict[str, str] = {}
+    for key, old_uuid in old_by_key.items():
+        new_uuid = explicit.get(key) or str(uuid.uuid4())
+        if not UUID_RE.fullmatch(new_uuid):
+            raise RotationError(f"invalid UUID for {LANGUAGE_NAMES[key]}: {new_uuid}")
+        new_uuid = new_uuid.lower()
+        if new_uuid == old_uuid:
+            raise RotationError(f"new {LANGUAGE_NAMES[key]} UUID matches the old UUID")
+        new_values[key] = new_uuid
+
+    if len(set(new_values.values())) != len(new_values):
+        raise RotationError("new UUIDs must be distinct per language")
+    if set(new_values.values()) & set(old_by_key.values()):
+        raise RotationError("new UUIDs must not reuse an existing UUID")
+
+    return [
+        Rotation(key, LANGUAGE_NAMES[key], old_by_key[key], new_values[key])
+        for key in LANGUAGE_NAMES
+    ]
+
+
+def apply_source_rotations(root: Path, rotations: list[Rotation], dry_run: bool) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for rotation in rotations:
+        count = 0
+        for path in source_files(root, rotation.language_key):
+            text = read(path)
+            updated = text.replace(rotation.old, rotation.new)
+            if updated != text:
+                count += text.count(rotation.old)
+                write(path, updated, dry_run)
+        counts[rotation.language_key] = count
+        if count == 0:
+            raise RotationError(f"did not replace any {rotation.language_name} UUIDs")
+    return counts
+
+
+def apply_rotate_md(root: Path, rotations: list[Rotation], dry_run: bool) -> None:
+    path = root / "ROTATE_UUID.md"
+    text = read(path)
+    for rotation in rotations:
+        text = text.replace(rotation.old, rotation.new)
+    write(path, text, dry_run)
+
+
+def print_summary(rotations: list[Rotation], counts: dict[str, int], dry_run: bool) -> None:
+    mode = "dry-run" if dry_run else "updated"
+    print(f"honeyslop UUID rotation {mode}:")
+    for rotation in rotations:
+        print(
+            f"- {rotation.language_name}: {rotation.old} -> {rotation.new} "
+            f"({counts[rotation.language_key]} replacement(s))"
+        )
+    print("\nNext steps:")
+    print("1. Review the diff: git diff")
+    print("2. Verify each new UUID appears only in its language tree:")
+    print("   grep -rn '<new-uuid>' python/ c/ js/ rust/ go/")
+    print("3. Consider rotating shibboleth names, fake CVE, banners, and fake credentials too.")
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--root", type=Path, default=Path.cwd(), help="repository root")
+    parser.add_argument("--dry-run", action="store_true", help="print planned UUIDs without writing files")
+    parser.add_argument("--python", dest="py", help="explicit replacement UUID for Python")
+    parser.add_argument("--c", dest="c", help="explicit replacement UUID for C")
+    parser.add_argument("--js", dest="js", help="explicit replacement UUID for JS")
+    parser.add_argument("--rust", dest="rs", help="explicit replacement UUID for Rust")
+    parser.add_argument("--go", dest="go", help="explicit replacement UUID for Go")
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv or sys.argv[1:])
+    root = repo_root_from(args.root)
+    explicit = {
+        key: value.lower()
+        for key, value in {
+            "py": args.py,
+            "c": args.c,
+            "js": args.js,
+            "rs": args.rs,
+            "go": args.go,
+        }.items()
+        if value
+    }
+
+    try:
+        old_by_key = current_uuids(root)
+        validate_existing_layout(root, old_by_key)
+        rotations = make_rotations(old_by_key, explicit)
+        counts = apply_source_rotations(root, rotations, args.dry_run)
+        apply_rotate_md(root, rotations, args.dry_run)
+        print_summary(rotations, counts, args.dry_run)
+        return 0
+    except RotationError as exc:
+        print(f"rotate-honeyslop: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

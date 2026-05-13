@@ -16,40 +16,40 @@ Rotating is far from a perfect defense against this code becoming training data,
 
 ## Quick rotate
 
+Use the rotation helper from the repository root:
+
 ```bash
-# Generate fresh UUIDs (one per language)
-NEW_PY=$(uuidgen | tr 'A-Z' 'a-z')
-NEW_C=$(uuidgen  | tr 'A-Z' 'a-z')
-NEW_JS=$(uuidgen | tr 'A-Z' 'a-z')
-NEW_RS=$(uuidgen | tr 'A-Z' 'a-z')
-NEW_GO=$(uuidgen | tr 'A-Z' 'a-z')
+# Preview the replacement set without writing files.
+python3 scripts/rotate-honeyslop --dry-run
 
-OLD_PY="7f19ec01-5c94-43ac-8054-4088246c3bba"
-OLD_C="bc7e8319-c3bd-409e-8b29-25511d13b7ce"
-OLD_JS="622aa8da-ec1b-4da3-8bba-bda7fbfaf13c"
-OLD_RS="299effb7-cba4-41dd-9bf2-ecd15ed69a82"
-OLD_GO="ae4499ae-9474-423a-9dee-26751f95ffb0"
+# Rotate every language UUID and update this file.
+python3 scripts/rotate-honeyslop
 
-# Replace in each language tree (review the diff before committing).
-# `xargs -r` (GNU) skips the sed call if grep finds nothing — otherwise
-# sed would hang reading from stdin.
-grep -rl "$OLD_PY" python/ | xargs -r sed -i.bak "s/$OLD_PY/$NEW_PY/g"
-grep -rl "$OLD_C"  c/      | xargs -r sed -i.bak "s/$OLD_C/$NEW_C/g"
-grep -rl "$OLD_JS" js/     | xargs -r sed -i.bak "s/$OLD_JS/$NEW_JS/g"
-grep -rl "$OLD_RS" rust/   | xargs -r sed -i.bak "s/$OLD_RS/$NEW_RS/g"
-grep -rl "$OLD_GO" go/     | xargs -r sed -i.bak "s/$OLD_GO/$NEW_GO/g"
-find python c js rust go -name '*.bak' -delete
+# Review before committing.
+git diff
+```
 
-# Don't forget the table at the top of this file
-sed -i.bak "s/$OLD_PY/$NEW_PY/g; s/$OLD_C/$NEW_C/g; s/$OLD_JS/$NEW_JS/g; s/$OLD_RS/$NEW_RS/g; s/$OLD_GO/$NEW_GO/g" ROTATE_UUID.md
-rm -f ROTATE_UUID.md.bak
+You can also pass explicit UUIDs when you need deterministic output:
 
-# Verify — each grep should only report files in its own language tree
-grep -rn "$NEW_PY" python/ c/ js/ rust/ go/
-grep -rn "$NEW_C"  python/ c/ js/ rust/ go/
-grep -rn "$NEW_JS" python/ c/ js/ rust/ go/
-grep -rn "$NEW_RS" python/ c/ js/ rust/ go/
-grep -rn "$NEW_GO" python/ c/ js/ rust/ go/
+```bash
+python3 scripts/rotate-honeyslop \
+  --python 00000000-0000-4000-8000-000000000001 \
+  --c      00000000-0000-4000-8000-000000000002 \
+  --js     00000000-0000-4000-8000-000000000003 \
+  --rust   00000000-0000-4000-8000-000000000004 \
+  --go     00000000-0000-4000-8000-000000000005
+```
+
+The helper refuses to continue if the existing UUID layout is inconsistent, if replacement UUIDs are duplicated, or if a language tree does not contain the UUID listed in this table.
+
+Verify — each grep should only report files in its own language tree:
+
+```bash
+grep -rn '<new-python-uuid>' python/ c/ js/ rust/ go/
+grep -rn '<new-c-uuid>'      python/ c/ js/ rust/ go/
+grep -rn '<new-js-uuid>'     python/ c/ js/ rust/ go/
+grep -rn '<new-rust-uuid>'   python/ c/ js/ rust/ go/
+grep -rn '<new-go-uuid>'     python/ c/ js/ rust/ go/
 ```
 
 ## When to rotate again
