@@ -1,0 +1,210 @@
+#!/usr/bin/env python3
+"""Validate honeyslop canaries stay inert, grep-able, and internally consistent."""
+
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+from collections import defaultdict
+from pathlib import Path
+
+UUID_RE = re.compile(
+    r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+    re.IGNORECASE,
+)
+
+LANG_DIRS = {
+    "Python": Path("python"),
+    "C": Path("c"),
+    "JS": Path("js"),
+    "Rust": Path("rust"),
+    "Go": Path("go"),
+}
+
+SOURCE_GLOBS = {
+    "Python": "*.py",
+    "C": "*.c",
+    "JS": "*.js",
+    "Rust": "*.rs",
+    "Go": "*.go",
+}
+
+ROTATE_ROW_RE = re.compile(r"^\|\s*(Python|C|JS|Rust|Go)\s*\|.*?`([0-9a-f-]{36})`", re.I)
+
+
+def rel(path: Path) -> str:
+    return path.as_posix()
+
+
+class Doctor:
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.errors: list[str] = []
+        self.warnings: list[str] = []
+
+    def fail(self, message: str) -> None:
+        self.errors.append(message)
+
+    def warn(self, message: str) -> None:
+        self.warnings.append(message)
+
+    def read(self, path: Path) -> str:
+        return (self.root / path).read_text(encoding="utf-8")
+
+    def files_for(self, language: str) -> list[Path]:
+        directory = self.root / LANG_DIRS[language]
+        if not directory.is_dir():
+            self.fail(f"missing language directory: {LANG_DIRS[language]}")
+            return []
+        return sorted(LANG_DIRS[language].glob(SOURCE_GLOBS[language]))
+
+    def rotate_table(self) -> dict[str, str]:
+        path = self.root / "ROTATE_UUID.md"
+        if not path.exists():
+            self.fail("missing ROTATE_UUID.md")
+            return {}
+        table: dict[str, str] = {}
+        for line in path.read_text(encoding="utf-8").splitlines():
+            match = ROTATE_ROW_RE.match(line)
+            if match:
+                table[match.group(1)] = match.group(2).lower()
+        for language in LANG_DIRS:
+            if language not in table:
+                self.fail(f"ROTATE_UUID.md is missing a UUID row for {language}")
+        return table
+
+    def check_uuid_consistency(self) -> None:
+        table = self.rotate_table()
+        seen_by_language: dict[str, set[str]] = defaultdict(set)
+        files_by_uuid: dict[str, list[Path]] = defaultdict(list)
+
+        for language in LANG_DIRS:
+            for path in self.files_for(language):
+                text = self.read(path)
+                for match in UUID_RE.findall(text):
+                    uuid = match.lower()
+                    seen_by_language[language].add(uuid)
+                    files_by_uuid[uuid].append(path)
+
+        for language, expected in table.items():
+            seen = seen_by_language[language]
+            if seen != {expected}:
+                self.fail(
+                    f"{language} UUID mismatch: expected only {expected}, found "
+                    f"{', '.join(sorted(seen)) or 'none'}"
+                )
+
+        for language, uuid in table.items():
+            for other_language in LANG_DIRS:
+                if other_language == language:
+                    continue
+                if uuid in seen_by_language[other_language]:
+                    self.fail(
+                        f"{language} UUID {uuid} also appears in {other_language} files"
+                    )
+
+        if len(set(table.values())) != len(table):
+            self.fail("ROTATE_UUID.md must use a distinct UUID per language")
+
+    def check_python(self) -> None:
+        for path in self.files_for("Python"):
+            text = self.read(path)
+            if "raise ImportError" not in text:
+                self.fail(f"{rel(path)}: missing top-level ImportError gate")
+            if "if False:" not in text:
+                self.fail(f"{rel(path)}: missing if False dead-code gate")
+            if not re.search(r"__all__\s*:\s*list\[str\]\s*=\s*\[\]", text):
+                self.fail(f"{rel(path)}: missing empty __all__ export gate")
+
+    def check_javascript(self) -> None:
+        for path in self.files_for("JS"):
+            text = self.read(path)
+            if "throw new Error" not in text:
+                self.fail(f"{rel(path)}: missing top-level throw gate")
+            if "if (false)" not in text:
+                self.fail(f"{rel(path)}: missing if (false) dead-code gate")
+            if not re.search(r"module\.exports\s*=\s*\{\s*\}", text):
+                self.fail(f"{rel(path)}: missing empty CommonJS export gate")
+
+    def check_rust(self) -> None:
+        for path in self.files_for("Rust"):
+            text = self.read(path)
+            if "compile_error!" not in text:
+                self.fail(f"{rel(path)}: missing compile_error! gate")
+            if "#[cfg(any())]" not in text:
+                self.fail(f"{rel(path)}: missing #[cfg(any())] dead-code gate")
+            if re.search(r"^\s*pub\s+", text, re.M):
+                self.fail(f"{rel(path)}: canary items should not be public")
+
+    def check_go(self) -> None:
+        for path in self.files_for("Go"):
+            text = self.read(path)
+            if not text.startswith("//go:build ignore"):
+                self.fail(f"{rel(path)}: missing leading //go:build ignore constraint")
+            if "func init()" not in text or "panic(" not in text:
+                self.fail(f"{rel(path)}: missing init panic gate")
+            for match in re.finditer(r"^func\s+([A-Z][A-Za-z0-9_]*)\s*\(", text, re.M):
+                self.fail(f"{rel(path)}: exported function {match.group(1)} should be unexported")
+
+    def check_c(self) -> None:
+        for path in self.files_for("C"):
+            text = self.read(path)
+            definitions = re.finditer(
+                r"^(?!\s*static\b)(?:[A-Za-z_][\w\s\*]*\s+)+([A-Za-z_]\w*)\s*\([^;]*\)\s*\{",
+                text,
+                re.M,
+            )
+            for match in definitions:
+                name = match.group(1)
+                if name not in {"main"}:
+                    self.fail(f"{rel(path)}: function {name} should be static")
+
+    def check_no_build_manifests(self) -> None:
+        risky_patterns = [
+            "Cargo.toml",
+            "go.mod",
+            "package.json",
+            "pyproject.toml",
+            "setup.py",
+            "CMakeLists.txt",
+            "Makefile",
+        ]
+        for pattern in risky_patterns:
+            for path in self.root.glob(pattern):
+                self.warn(f"build manifest present; verify canary paths are excluded: {path.name}")
+
+    def run(self) -> int:
+        self.check_uuid_consistency()
+        self.check_python()
+        self.check_javascript()
+        self.check_rust()
+        self.check_go()
+        self.check_c()
+        self.check_no_build_manifests()
+
+        for warning in self.warnings:
+            print(f"WARN: {warning}")
+        if self.errors:
+            print("honeyslop doctor found problems:", file=sys.stderr)
+            for error in self.errors:
+                print(f"- {error}", file=sys.stderr)
+            return 1
+        print("honeyslop doctor: OK")
+        return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--root",
+        type=Path,
+        default=Path.cwd(),
+        help="repository root to validate (default: current directory)",
+    )
+    args = parser.parse_args()
+    return Doctor(args.root.resolve()).run()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

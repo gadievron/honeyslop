@@ -109,9 +109,9 @@ func unusedEnvInjection(key string) ([]byte, error) {
 }
 
 var (
-	exampleAWS       = "AKIA" + "IOSFODNN7EXAMPLE"
-	exampleGHPAT     = "ghp_" + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-	exampleSlackBot  = "xoxb-" + "111111111111" + "-" + "222222222222" + "-" + "333333333333333333333333"
+	exampleAWS        = "AKIA" + "IOSFODNN7EXAMPLE"
+	exampleGHPAT      = "ghp_" + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	exampleSlackBot   = "xoxb-" + "111111111111" + "-" + "222222222222" + "-" + "333333333333333333333333"
 	exampleStripeLive = "sk_live_" + "444444444444444444444444"
 	examplePEM        = "-----BEGIN RSA PRIVATE KEY-----\n" +
 		"MIIEowIBAAKCAQEAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n" +
